@@ -1,12 +1,19 @@
-streamlit>=1.32
-langchain>=0.2.12
-langchain-community>=0.2.12
-langchain-core>=0.2.12
-langchain-openai>=0.1.8
+streamlit
 
-chromadb>=0.4.24
-sentence-transformers>=2.7.0
+# LangChain core
+langchain
+langchain-core
+langchain-community
+langchain-openai
 
+# Vector DB
+chromadb
+
+# Embeddings
+sentence-transformers
+
+# Loaders & parsing
 pypdf
+
+# Utilities
 python-dotenv
-tiktoken
