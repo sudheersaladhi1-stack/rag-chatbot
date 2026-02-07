@@ -1,19 +1,9 @@
 streamlit
-
-# LangChain core
 langchain
-langchain-core
 langchain-community
+langchain-core
 langchain-openai
-
-# Vector DB
 chromadb
-
-# Embeddings
 sentence-transformers
-
-# Loaders & parsing
 pypdf
-
-# Utilities
 python-dotenv
