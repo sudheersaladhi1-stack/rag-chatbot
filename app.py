@@ -35,6 +35,11 @@ def highlight_text(text: str, query: str):
     return re.sub(r"\w+", replacer, text)
 
 
+def format_docs(docs):
+    """Convert retrieved docs to a single context string"""
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
 # =====================================================
 # Streamlit config
 # =====================================================
@@ -69,9 +74,7 @@ def load_retriever(collection_name: str):
     vectorstore = get_vectorstore(collection_name)
     return vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={
-            "k": 6   # over-fetch here, trim later to 3
-        }
+        search_kwargs={"k": 6}  # over-fetch
     )
 
 
@@ -125,7 +128,7 @@ if st.sidebar.button("📥 Ingest documents"):
 
             chunks = splitter.split_documents(all_docs)
 
-            # Deduplicate before storing
+            # Deduplicate chunks BEFORE inserting
             def doc_hash(text: str) -> str:
                 return hashlib.md5(text.encode("utf-8")).hexdigest()
 
@@ -136,17 +139,7 @@ if st.sidebar.button("📥 Ingest documents"):
                     unique_chunks[h] = chunk
 
             vectorstore = get_vectorstore(collection_name)
-            docs = []
-            ids = []
-
-            for h, chunk in unique_chunks.items():
-                docs.append(chunk)
-                ids.append(h)
-
-            vectorstore.add_documents(
-                 documents=docs,
-                ids=ids
-                    )
+            vectorstore.add_documents(list(unique_chunks.values()))
 
         st.sidebar.success("Documents added successfully ✅")
 
@@ -188,7 +181,7 @@ for msg in st.session_state.messages:
 user_input = st.chat_input("Ask a question based on the uploaded documents...")
 
 if user_input:
-    # User message
+    # --- User message ---
     st.session_state.messages.append(
         {"role": "user", "content": user_input}
     )
@@ -197,38 +190,33 @@ if user_input:
         st.markdown(user_input)
 
     # =================================================
-    # Retrieve + FORCE EXACTLY 3 UNIQUE CHUNKS
+    # Retrieve EXACTLY 3 UNIQUE CHUNKS
     # =================================================
     raw_docs = retriever.invoke(user_input)
 
     seen = set()
-    final_docs = []
+    retrieved_docs = []
 
     for doc in raw_docs:
         text = doc.page_content.strip()
         if text and text not in seen:
             seen.add(text)
-            final_docs.append(doc)
-        if len(final_docs) == 3:
+            retrieved_docs.append(doc)
+        if len(retrieved_docs) == 3:
             break
 
-    # Fallback padding
-    if len(final_docs) < 3:
-        for doc in raw_docs:
-            if doc not in final_docs:
-                final_docs.append(doc)
-            if len(final_docs) == 3:
-                break
-
-    retrieved_docs = final_docs
+    context_text = format_docs(retrieved_docs)
 
     # =================================================
-    # Generate answer
+    # Generate answer (PASS CONTEXT EXPLICITLY)
     # =================================================
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             response = rag_chain_with_memory.invoke(
-                {"input": user_input},
+                {
+                    "input": user_input,
+                    "context": context_text
+                },
                 config={
                     "configurable": {
                         "session_id": st.session_state.session_id
@@ -250,7 +238,7 @@ if user_input:
                     )
                     st.markdown("---")
 
-    # Save assistant message
+    # --- Save assistant message ---
     st.session_state.messages.append(
         {
             "role": "assistant",
