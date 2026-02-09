@@ -2,7 +2,6 @@ streamlit
 langchain
 langchain-community
 langchain-core
-langchain-openai
 chromadb
 sentence-transformers
 pypdf
