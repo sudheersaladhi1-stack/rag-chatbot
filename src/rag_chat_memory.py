@@ -1,6 +1,6 @@
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain_community.llms import Ollama
+from langchain_community.llms import ollama
 from langchain_community.chat_message_histories import ChatMessageHistory
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -11,7 +11,7 @@ from langchain_core.runnables import (
 )
 from langchain_core.runnables.history import RunnableWithMessageHistory
 import os
-from langchain_openai import ChatOpenAI
+#from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -52,11 +52,15 @@ os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_API_KEY"]
 #     max_new_tokens=512,
 # )
 
-llm = ChatOpenAI(
-    model="gpt-4o-mini",   # best cost/quality for RAG
-    temperature=0.2,
-)
+# llm = ChatOpenAI(
+#     model="gpt-4o-mini",   # best cost/quality for RAG
+#     temperature=0.2,
+# )
 
+llm = ollama(
+    model="mistral",
+    temperature=0
+)
 # -------------------------------------------------
 # Rewrite prompt (history-aware question)
 # -------------------------------------------------
