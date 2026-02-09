@@ -78,11 +78,19 @@ def load_retriever(collection_name: str):
 
 
 def clear_collection(collection_name: str):
-    """Safely clears only the selected collection"""
-    vectorstore = get_vectorstore(collection_name)
     try:
-        vectorstore._collection.delete(where={})
-        vectorstore._collection.persist()
+        vectorstore = get_vectorstore(collection_name)
+        client = vectorstore._client
+
+        # Delete the entire collection
+        client.delete_collection(collection_name)
+
+        # Recreate empty collection
+        client.create_collection(
+            name=collection_name,
+            embedding_function=embedding_model
+        )
+
         return True
     except Exception as e:
         st.error(f"Failed to clear DB: {e}")
