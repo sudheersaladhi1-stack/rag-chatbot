@@ -82,14 +82,11 @@ def clear_collection(collection_name: str):
         vectorstore = get_vectorstore(collection_name)
         client = vectorstore._client
 
-        # Delete the entire collection
+        # Delete collection safely
         client.delete_collection(collection_name)
 
-        # Recreate empty collection
-        client.create_collection(
-            name=collection_name,
-            embedding_function=embedding_model
-        )
+        # Clear Streamlit cache so retriever reloads cleanly
+        st.cache_resource.clear()
 
         return True
     except Exception as e:
