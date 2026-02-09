@@ -64,7 +64,7 @@ def get_vectorstore(collection_name: str):
     )
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_retriever(collection_name: str):
     vectorstore = get_vectorstore(collection_name)
     return vectorstore.as_retriever(
@@ -137,7 +137,17 @@ if st.sidebar.button("📥 Ingest documents"):
                     unique_chunks[h] = chunk
 
             vectorstore = get_vectorstore(collection_name)
-            vectorstore.add_documents(list(unique_chunks.values()))
+            docs = []
+            ids = []
+
+            for h, chunk in unique_chunks.items():
+                docs.append(chunk)
+                ids.append(h)
+
+            vectorstore.add_documents(
+                 documents=docs,
+                ids=ids
+                    )
 
         st.sidebar.success("Documents added successfully ✅")
 
