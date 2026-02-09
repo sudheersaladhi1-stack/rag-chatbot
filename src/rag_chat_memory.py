@@ -55,21 +55,22 @@ history_aware_retriever = RunnableLambda(retrieve_with_history)
 # -------------------------
 # Final QA prompt
 # -------------------------
-qa_prompt = ChatPromptTemplate.from_messages([
-    ("system",
-     """You are a retrieval-augmented assistant.
-
-Answer ONLY using the provided context.
-
-If not found, reply exactly:
+qa_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """Answer ONLY using the context below.
+If the answer is not present, say:
 "I don't know based on the provided context."
 
 Context:
 {context}
-"""),
-    MessagesPlaceholder("chat_history"),
-    ("human", "{input}")
-])
+"""
+        ),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{input}")
+    ]
+)
 
 def format_docs(docs):
     return "\n\n".join(d.page_content for d in docs)
