@@ -59,8 +59,14 @@ qa_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """Answer ONLY using the context below.
-If the answer is not present, say:
+            """You are a retrieval-augmented assistant.
+
+Answer the user's question using ONLY the provided context.
+
+Rules:
+- You MAY summarize, infer, or rephrase information that is clearly present in the context.
+- If the context contains enough information to answer the question, provide a clear and concise answer.
+- If the context does NOT contain sufficient information, reply EXACTLY with:
 "I don't know based on the provided context."
 
 Context:
