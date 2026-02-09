@@ -9,8 +9,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 
-# Import your RAG chain (WORKING ONE)
-from src.rag_chat_memory import rag_chain_with_memory
+# Import your WORKING RAG chain + memory store
+from src.rag_chat_memory import rag_chain_with_memory, store
 
 
 # =====================================================
@@ -70,28 +70,11 @@ def get_vectorstore(collection_name: str):
 
 @st.cache_resource(show_spinner=False)
 def load_retriever(collection_name: str):
-    vectorstore = get_vectorstore(collection_name)
-    return vectorstore.as_retriever(
+    vs = get_vectorstore(collection_name)
+    return vs.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": 6}
+        search_kwargs={"k": 6}  # over-fetch
     )
-
-
-def clear_collection(collection_name: str):
-    try:
-        vectorstore = get_vectorstore(collection_name)
-        client = vectorstore._client
-
-        # Delete collection safely
-        client.delete_collection(collection_name)
-
-        # Clear Streamlit cache so retriever reloads cleanly
-        st.cache_resource.clear()
-
-        return True
-    except Exception as e:
-        st.error(f"Failed to clear DB: {e}")
-        return False
 
 
 # =====================================================
@@ -115,9 +98,10 @@ uploaded_files = st.sidebar.file_uploader(
 
 retriever = load_retriever(collection_name)
 
-# -----------------------------------------------------
+
+# =====================================================
 # Ingest documents
-# -----------------------------------------------------
+# =====================================================
 if st.sidebar.button("📥 Ingest documents"):
     if not uploaded_files:
         st.sidebar.warning("Please upload at least one file.")
@@ -155,8 +139,8 @@ if st.sidebar.button("📥 Ingest documents"):
 
             unique_chunks = {}
             for chunk in chunks:
-                chunk.metadata["collection"] = collection_name
                 source = chunk.metadata.get("source", "")
+                chunk.metadata["collection"] = collection_name
                 h = doc_hash(chunk.page_content, source)
                 if h not in unique_chunks:
                     unique_chunks[h] = chunk
@@ -170,24 +154,40 @@ if st.sidebar.button("📥 Ingest documents"):
                 documents.append(chunk)
                 ids.append(h)
 
-            vectorstore.add_documents(
-                documents=documents,
-                ids=ids
-            )
+            vectorstore.add_documents(documents=documents, ids=ids)
 
         st.sidebar.success("Documents added successfully ✅")
         st.cache_resource.clear()
         st.rerun()
-# -----------------------------------------------------
-# CLEAR DATABASE BUTTON (🔥 IMPORTANT)
-# -----------------------------------------------------
+
+
+# =====================================================
+# Clear knowledge base (🔥 CRITICAL FIX)
+# =====================================================
 st.sidebar.divider()
 
 if st.sidebar.button("🗑️ Clear knowledge base"):
-    if clear_collection(collection_name):
+    try:
+        vs = get_vectorstore(collection_name)
+        ids = vs._collection.get().get("ids", [])
+
+        if ids:
+            vs._collection.delete(ids=ids)
+
+        # Clear retriever cache
+        st.cache_resource.clear()
+
+        # Clear LangChain memory
+        store.clear()
+
+        # Clear UI messages
         st.session_state.messages = []
-        st.sidebar.success("Knowledge base cleared ✅")
+
+        st.sidebar.success("Knowledge base cleared successfully ✅")
         st.rerun()
+
+    except Exception as e:
+        st.sidebar.error(f"Failed to clear DB: {e}")
 
 
 # =====================================================
@@ -263,6 +263,12 @@ if user_input:
             retrieved_docs.append(doc)
         if len(retrieved_docs) == 3:
             break
+
+    # Safety: no context → no hallucination
+    if not retrieved_docs:
+        with st.chat_message("assistant"):
+            st.markdown("I don't know based on the provided context.")
+        st.stop()
 
     context_text = format_docs(retrieved_docs)
 
