@@ -134,6 +134,7 @@ if st.sidebar.button("📥 Ingest documents"):
 
             unique_chunks = {}
             for chunk in chunks:
+                chunk.metadata["person"] = collection_name
                 h = doc_hash(chunk.page_content)
                 if h not in unique_chunks:
                     unique_chunks[h] = chunk
