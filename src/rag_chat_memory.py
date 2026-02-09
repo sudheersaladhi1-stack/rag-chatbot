@@ -1,39 +1,66 @@
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.chat_message_histories import ChatMessageHistory
 
-from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
+from langchain_community.chat_models import ChatOpenAI
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# =====================================================
-# LLM
-# =====================================================
+# -------------------------
+# Embeddings + Vector DB
+# -------------------------
+embedding_model = SentenceTransformerEmbeddings(
+    model_name="all-MiniLM-L6-v2"
+)
+
+vectorstore = Chroma(
+    persist_directory="chroma_db",
+    embedding_function=embedding_model
+)
+
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+# -------------------------
+# LLM (OpenAI)
+# -------------------------
 llm = ChatOpenAI(
     model="gpt-3.5-turbo",
     temperature=0
 )
 
-# =====================================================
-# STRICT QA PROMPT (context-only)
-# =====================================================
+# -------------------------
+# Rewrite follow-up questions
+# -------------------------
+rewrite_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Rewrite the user's question as a standalone question using the chat history."),
+    MessagesPlaceholder("chat_history"),
+    ("human", "{input}")
+])
+
+rewrite_chain = rewrite_prompt | llm | StrOutputParser()
+
+def retrieve_with_history(inputs: dict):
+    standalone = rewrite_chain.invoke(inputs)
+    return retriever.invoke(standalone)
+
+history_aware_retriever = RunnableLambda(retrieve_with_history)
+
+# -------------------------
+# Final QA prompt
+# -------------------------
 qa_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """You are a retrieval-augmented assistant.
-
-Answer the user's question ONLY using the provided context.
-
-If the answer IS present in the context:
-- Answer clearly and directly.
-
-If the answer is NOT present in the context:
-- Reply EXACTLY with:
+            """Answer ONLY using the context below.
+If the answer is not present, say:
 "I don't know based on the provided context."
 
 Context:
@@ -45,19 +72,18 @@ Context:
     ]
 )
 
-# =====================================================
-# RAG chain (NO RETRIEVER HERE)
-# =====================================================
+def format_docs(docs):
+    return "\n\n".join(d.page_content for d in docs)
+
 rag_chain = (
-    RunnablePassthrough
+    RunnablePassthrough.assign(
+        context=history_aware_retriever | format_docs
+    )
     | qa_prompt
     | llm
     | StrOutputParser()
 )
 
-# =====================================================
-# Memory store
-# =====================================================
 store = {}
 
 def get_session_history(session_id: str):
@@ -65,9 +91,6 @@ def get_session_history(session_id: str):
         store[session_id] = ChatMessageHistory()
     return store[session_id]
 
-# =====================================================
-# Chain with memory
-# =====================================================
 rag_chain_with_memory = RunnableWithMessageHistory(
     rag_chain,
     get_session_history,
