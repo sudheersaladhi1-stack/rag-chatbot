@@ -32,8 +32,9 @@ Rules:
 - Use ONLY information explicitly present in Context.
 - DO NOT use prior chat history, world knowledge, or assumptions.
 - DO NOT infer or guess missing information.
-- If the answer is NOT explicitly stated in Context, reply EXACTLY:
-"I don't know based on the provided context."
+- If the answer is NOT explicitly stated in Context, reply EXACTLY:"I don't know based on the provided context.
+- "You MUST answer strictly and only from the provided Context."
+"
 
 Context:
 {context}
