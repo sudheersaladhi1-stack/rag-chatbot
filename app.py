@@ -1,9 +1,6 @@
 import streamlit as st
 from uuid import uuid4
-import os
-import re
-import hashlib
-import requests
+import os, re, hashlib, requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
@@ -11,8 +8,9 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_core.documents import Document
 
-# WORKING RAG chain + memory store
+# RAG chain + memory store
 from src.rag_chat_memory import rag_chain_with_memory, store
 
 
@@ -22,18 +20,14 @@ from src.rag_chat_memory import rag_chain_with_memory, store
 def highlight_text(text: str, query: str):
     if not query:
         return text
-
-    keywords = {
-        w.lower()
-        for w in re.findall(r"\w+", query)
-        if len(w) > 2
-    }
-
-    def repl(match):
-        w = match.group(0)
-        return f"<mark>{w}</mark>" if w.lower() in keywords else w
-
-    return re.sub(r"\w+", repl, text)
+    keywords = {w.lower() for w in re.findall(r"\w+", query) if len(w) > 2}
+    return re.sub(
+        r"\w+",
+        lambda m: f"<mark>{m.group(0)}</mark>"
+        if m.group(0).lower() in keywords
+        else m.group(0),
+        text,
+    )
 
 
 def format_docs(docs):
@@ -48,13 +42,12 @@ def extract_person_names(text: str):
 # URL Loader
 # =====================================================
 def load_url_as_documents(url: str):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers, timeout=15)
+    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
     r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
-        tag.decompose()
+    for t in soup(["script", "style", "nav", "footer", "header", "noscript"]):
+        t.decompose()
 
     text = "\n".join(
         line.strip()
@@ -62,15 +55,14 @@ def load_url_as_documents(url: str):
         if line.strip()
     )
 
-    from langchain_core.documents import Document
     return [
         Document(
             page_content=text,
             metadata={
                 "source": urlparse(url).netloc,
                 "type": "url",
-                "url": url
-            }
+                "url": url,
+            },
         )
     ]
 
@@ -86,24 +78,21 @@ st.caption("PDF / TXT / URL → Strict RAG (No Hallucination)")
 # =====================================================
 # Vectorstore
 # =====================================================
-embedding_model = SentenceTransformerEmbeddings(
-    model_name="all-MiniLM-L6-v2"
-)
+embedding_model = SentenceTransformerEmbeddings("all-MiniLM-L6-v2")
 
 
-def get_vectorstore(collection_name: str):
+def get_vectorstore(collection):
     return Chroma(
-        collection_name=collection_name,
+        collection_name=collection,
         persist_directory="chroma_db",
-        embedding_function=embedding_model
+        embedding_function=embedding_model,
     )
 
 
 @st.cache_resource(show_spinner=False)
-def load_retriever(collection_name: str):
-    return get_vectorstore(collection_name).as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 6}
+def load_retriever(collection):
+    return get_vectorstore(collection).as_retriever(
+        search_type="similarity", search_kwargs={"k": 6}
     )
 
 
@@ -111,7 +100,7 @@ def load_retriever(collection_name: str):
 # Sidebar
 # =====================================================
 st.sidebar.header("🗂️ Collection")
-collection_name = st.sidebar.text_input("Collection name", value="default")
+collection_name = st.sidebar.text_input("Collection name", "default")
 
 st.sidebar.header("📂 Upload Files")
 uploaded_files = st.sidebar.file_uploader(
@@ -128,52 +117,40 @@ retriever = load_retriever(collection_name)
 # Ingest helper
 # =====================================================
 def ingest_documents(docs):
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,
-        chunk_overlap=150
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=150)
     chunks = splitter.split_documents(docs)
 
-    def hash_doc(text, source):
-        return hashlib.md5(
-            f"{collection_name}:{source}:{text}".encode()
-        ).hexdigest()
+    def make_id(text, src):
+        return hashlib.md5(f"{collection_name}:{src}:{text}".encode()).hexdigest()
 
     unique = {}
     for c in chunks:
-        source = c.metadata.get("source", "")
+        src = c.metadata.get("source", "")
         c.metadata["collection"] = collection_name
-        h = hash_doc(c.page_content, source)
-        if h not in unique:
-            unique[h] = c
+        uid = make_id(c.page_content, src)
+        unique[uid] = c
 
     vs = get_vectorstore(collection_name)
-    vs.add_documents(
-        documents=list(unique.values()),
-        ids=list(unique.keys())
-    )
+    vs.add_documents(list(unique.values()), ids=list(unique.keys()))
 
 
 # =====================================================
-# Ingest Files
+# Ingest files
 # =====================================================
 if st.sidebar.button("📥 Ingest documents"):
     if not uploaded_files:
         st.sidebar.warning("Upload at least one file")
     else:
-        with st.spinner("Ingesting files..."):
-            docs = []
-            for f in uploaded_files:
-                tmp = f"temp_{f.name}"
-                with open(tmp, "wb") as t:
-                    t.write(f.read())
+        docs = []
+        for f in uploaded_files:
+            tmp = f"tmp_{f.name}"
+            with open(tmp, "wb") as t:
+                t.write(f.read())
+            loader = PyPDFLoader(tmp) if f.name.endswith(".pdf") else TextLoader(tmp)
+            docs.extend(loader.load())
+            os.remove(tmp)
 
-                loader = PyPDFLoader(tmp) if f.name.endswith(".pdf") else TextLoader(tmp)
-                docs.extend(loader.load())
-                os.remove(tmp)
-
-            ingest_documents(docs)
-
+        ingest_documents(docs)
         st.cache_resource.clear()
         st.sidebar.success("Documents added ✅")
         st.rerun()
@@ -186,20 +163,16 @@ if st.sidebar.button("🌍 Ingest URL"):
     if not url_input:
         st.sidebar.warning("Enter a valid URL")
     else:
-        with st.spinner("Fetching website..."):
-            docs = load_url_as_documents(url_input)
-            ingest_documents(docs)
-
+        ingest_documents(load_url_as_documents(url_input))
         st.cache_resource.clear()
         st.sidebar.success("Website added ✅")
         st.rerun()
 
 
 # =====================================================
-# Clear Knowledge Base
+# Clear Knowledge Base (SAFE)
 # =====================================================
 st.sidebar.divider()
-
 if st.sidebar.button("🗑️ Clear knowledge base"):
     vs = get_vectorstore(collection_name)
     ids = vs._collection.get().get("ids", [])
@@ -208,20 +181,22 @@ if st.sidebar.button("🗑️ Clear knowledge base"):
 
     store.clear()
     st.cache_resource.clear()
-    st.session_state.clear()
+    st.session_state["messages"] = []
+    st.session_state["session_id"] = str(uuid4())
+
     st.sidebar.success("Knowledge base cleared ✅")
     st.rerun()
 
 
 # =====================================================
-# Session state
+# Session State (FIXED)
 # =====================================================
 st.session_state.setdefault("session_id", str(uuid4()))
 st.session_state.setdefault("messages", [])
 
 
 # =====================================================
-# Disable chat if empty
+# Disable chat if DB empty
 # =====================================================
 doc_count = get_vectorstore(collection_name)._collection.count()
 st.sidebar.caption(f"📄 Documents in DB: {doc_count}")
@@ -232,67 +207,56 @@ if doc_count == 0:
 
 
 # =====================================================
-# Display chat history
+# Display chat history (SOURCE OF TRUTH)
 # =====================================================
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
 
 # =====================================================
-# Chat (🔥 FIXED)
+# Chat
 # =====================================================
 user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 
 if user_input:
-    # 1️⃣ Save + render user message immediately
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    # 1️⃣ show user message immediately
+    st.session_state.messages.append(
+        {"role": "user", "content": user_input}
+    )
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Retrieve
+    # retrieve
     raw_docs = retriever.invoke(user_input)
 
-    seen, retrieved = set(), []
+    seen, docs = set(), []
     for d in raw_docs:
         t = d.page_content.strip()
         if t and t not in seen:
             seen.add(t)
-            retrieved.append(d)
-        if len(retrieved) == 3:
+            docs.append(d)
+        if len(docs) == 3:
             break
 
-    if not retrieved:
-        with st.chat_message("assistant"):
-            st.markdown("I don't know based on the provided context.")
-        st.stop()
+    if not docs:
+        answer = "I don't know based on the provided context."
+    else:
+        context = format_docs(docs)
 
-    context_text = format_docs(retrieved)
+        # person mismatch guard
+        if extract_person_names(user_input) - extract_person_names(context):
+            answer = "I don't know based on the provided context."
+        else:
+            answer = rag_chain_with_memory.invoke(
+                {"input": user_input, "context": context},
+                config={"configurable": {"session_id": st.session_state.session_id}},
+            )
 
-    # 🚫 Person mismatch guard
-    if extract_person_names(user_input) - extract_person_names(context_text):
-        with st.chat_message("assistant"):
-            st.markdown("I don't know based on the provided context.")
-        st.stop()
-
-    # Assistant
+    # assistant
     with st.chat_message("assistant"):
-        response = rag_chain_with_memory.invoke(
-            {"input": user_input, "context": context_text},
-            config={"configurable": {"session_id": st.session_state.session_id}}
-        )
-        st.markdown(response)
+        st.markdown(answer)
 
-        with st.expander("🔍 Show retrieved context"):
-            for i, d in enumerate(retrieved, 1):
-                st.markdown(
-                    f"**Chunk {i}**\n\n{highlight_text(d.page_content, user_input)}",
-                    unsafe_allow_html=True
-                )
-
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": response,
-        "docs": retrieved,
-        "query": user_input
-    })
+    st.session_state.messages.append(
+        {"role": "assistant", "content": answer}
+    )
