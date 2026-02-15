@@ -1,6 +1,6 @@
 import streamlit as st
 from uuid import uuid4
-import os, re, hashlib, requests
+import os, re, hashlib, requests, html
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
@@ -55,6 +55,25 @@ def format_docs(docs):
 
 def extract_person_names(text: str):
     return {w.lower() for w in re.findall(r"[A-Z][a-z]+", text)}
+
+
+# ✅ NEW: Highlight function
+def highlight_text(text: str, query: str):
+    """
+    Highlights matching query terms inside retrieved chunk text.
+    """
+    text = html.escape(text)
+    words = re.findall(r"\w+", query.lower())
+
+    for word in set(words):
+        if len(word) < 3:
+            continue
+        pattern = re.compile(rf"({re.escape(word)})", re.IGNORECASE)
+        text = pattern.sub(
+            r"<mark style='background-color: #ffe066'>\1</mark>",
+            text,
+        )
+    return text
 
 
 # =====================================================
@@ -113,7 +132,7 @@ def ingest_documents(docs):
     )
     chunks = splitter.split_documents(docs)
 
-    ingest_id = uuid4().hex  # prevents ID collision
+    ingest_id = uuid4().hex
 
     def make_id(text, src):
         return hashlib.md5(
@@ -236,12 +255,13 @@ if user_input:
     retriever = get_retriever(collection_name)
     raw_docs = retriever.invoke(user_input)
 
-    # 🔍 DEBUG PANEL (can remove later)
-    with st.expander("🔍 Retrieved chunks (debug)"):
+    # 🔥 Highlighted Debug Panel
+    with st.expander("🔍 Retrieved chunks (highlighted)"):
         st.write(f"Retrieved {len(raw_docs)} chunks")
         for i, d in enumerate(raw_docs[:3]):
             st.markdown(f"**Chunk {i+1}:**")
-            st.write(d.page_content[:500])
+            highlighted = highlight_text(d.page_content[:1000], user_input)
+            st.markdown(highlighted, unsafe_allow_html=True)
 
     seen, docs = set(), []
     for d in raw_docs:
