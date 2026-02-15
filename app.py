@@ -10,21 +10,32 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.documents import Document
 
+# RAG chain + memory store
 from src.rag_chat_memory import rag_chain_with_memory, store
 
 
 # =====================================================
 # Utilities
 # =====================================================
+def highlight_text(text: str, query: str):
+    if not query:
+        return text
+    keywords = {w.lower() for w in re.findall(r"\w+", query) if len(w) > 2}
+    return re.sub(
+        r"\w+",
+        lambda m: f"<mark>{m.group(0)}</mark>"
+        if m.group(0).lower() in keywords
+        else m.group(0),
+        text,
+    )
+
+
 def format_docs(docs):
     return "\n\n".join(d.page_content for d in docs)
 
 
-def extract_named_entities(text: str):
-    return {
-        w.lower()
-        for w in re.findall(r"\b[A-Z][a-z]{2,}\b", text)
-    }
+def extract_person_names(text: str):
+    return {w.lower() for w in re.findall(r"[A-Z][a-z]+", text)}
 
 
 # =====================================================
@@ -57,7 +68,7 @@ def load_url_as_documents(url: str):
 
 
 # =====================================================
-# Streamlit Config
+# Streamlit config
 # =====================================================
 st.set_page_config(page_title="RAG Chatbot", page_icon="🤖", layout="centered")
 st.title("🤖 RAG Chatbot")
@@ -65,7 +76,7 @@ st.caption("PDF / TXT / URL → Strict RAG (No Hallucination)")
 
 
 # =====================================================
-# Vector Store
+# Vectorstore
 # =====================================================
 embedding_model = SentenceTransformerEmbeddings(
     model_name="all-MiniLM-L6-v2"
@@ -82,11 +93,7 @@ def get_vectorstore(collection):
 @st.cache_resource(show_spinner=False)
 def load_retriever(collection):
     return get_vectorstore(collection).as_retriever(
-        search_type="similarity_score_threshold",
-        search_kwargs={
-            "k": 5,
-            "score_threshold": 0.4,  # 🔒 STRICT GATE
-        },
+        search_type="similarity", search_kwargs={"k": 6}
     )
 
 
@@ -108,18 +115,14 @@ retriever = load_retriever(collection_name)
 
 
 # =====================================================
-# Ingest Helper
+# Ingest helper
 # =====================================================
 def ingest_documents(docs):
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600, chunk_overlap=150
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=150)
     chunks = splitter.split_documents(docs)
 
     def make_id(text, src):
-        return hashlib.md5(
-            f"{collection_name}:{src}:{text}".encode()
-        ).hexdigest()
+        return hashlib.md5(f"{collection_name}:{src}:{text}".encode()).hexdigest()
 
     unique = {}
     for c in chunks:
@@ -133,7 +136,7 @@ def ingest_documents(docs):
 
 
 # =====================================================
-# Ingest Actions
+# Ingest files
 # =====================================================
 if st.sidebar.button("📥 Ingest documents"):
     if not uploaded_files:
@@ -144,7 +147,6 @@ if st.sidebar.button("📥 Ingest documents"):
             tmp = f"tmp_{f.name}"
             with open(tmp, "wb") as t:
                 t.write(f.read())
-
             loader = PyPDFLoader(tmp) if f.name.endswith(".pdf") else TextLoader(tmp)
             docs.extend(loader.load())
             os.remove(tmp)
@@ -155,6 +157,9 @@ if st.sidebar.button("📥 Ingest documents"):
         st.rerun()
 
 
+# =====================================================
+# Ingest URL
+# =====================================================
 if st.sidebar.button("🌍 Ingest URL"):
     if not url_input:
         st.sidebar.warning("Enter a valid URL")
@@ -166,7 +171,7 @@ if st.sidebar.button("🌍 Ingest URL"):
 
 
 # =====================================================
-# Clear KB
+# Clear Knowledge Base (SAFE)
 # =====================================================
 st.sidebar.divider()
 if st.sidebar.button("🗑️ Clear knowledge base"):
@@ -177,20 +182,22 @@ if st.sidebar.button("🗑️ Clear knowledge base"):
 
     store.clear()
     st.cache_resource.clear()
-    st.session_state.clear()
+    st.session_state["messages"] = []
+    st.session_state["session_id"] = str(uuid4())
+
     st.sidebar.success("Knowledge base cleared ✅")
     st.rerun()
 
 
 # =====================================================
-# Session State
+# Session State (FIXED)
 # =====================================================
 st.session_state.setdefault("session_id", str(uuid4()))
 st.session_state.setdefault("messages", [])
 
 
 # =====================================================
-# Disable Chat if Empty
+# Disable chat if DB empty
 # =====================================================
 doc_count = get_vectorstore(collection_name)._collection.count()
 st.sidebar.caption(f"📄 Documents in DB: {doc_count}")
@@ -201,7 +208,7 @@ if doc_count == 0:
 
 
 # =====================================================
-# Display History
+# Display chat history (SOURCE OF TRUTH)
 # =====================================================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -209,51 +216,56 @@ for msg in st.session_state.messages:
 
 
 # =====================================================
-# Chat (STRICT RAG)
+# Chat
 # =====================================================
 user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 
 if user_input:
-    st.session_state.messages.append(
-        {"role": "user", "content": user_input}
-    )
+    # 1️⃣ Show user message
+    st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
+    # 2️⃣ Retrieve documents
     raw_docs = retriever.invoke(user_input)
+    
+    # Deduplicate and limit
+    seen, docs = set(), []
+    for d in raw_docs:
+        t = d.page_content.strip()
+        if t and t not in seen:
+            seen.add(t)
+            docs.append(d)
+        if len(docs) == 3:
+            break
 
-    if not raw_docs:
+    # 3️⃣ Generate Answer
+    if not docs:
         answer = "I don't know based on the provided context."
     else:
-        docs, seen = [], set()
-        for d in raw_docs:
-            text = d.page_content.strip()
-            if text and text not in seen:
-                seen.add(text)
-                docs.append(d)
-            if len(docs) == 3:
-                break
-
-        if not docs:
+        context = format_docs(docs)
+        if extract_person_names(user_input) - extract_person_names(context):
             answer = "I don't know based on the provided context."
         else:
-            context = format_docs(docs)
+            answer = rag_chain_with_memory.invoke(
+                {"input": user_input, "context": context},
+                config={"configurable": {"session_id": st.session_state.session_id}},
+            )
 
-            if extract_named_entities(user_input) - extract_named_entities(context):
-                answer = "I don't know based on the provided context."
-            else:
-                answer = rag_chain_with_memory.invoke(
-                    {"input": user_input, "context": context},
-                    config={
-                        "configurable": {
-                            "session_id": st.session_state.session_id
-                        }
-                    },
-                )
-
+    # 4️⃣ Display assistant response and Chunks
     with st.chat_message("assistant"):
         st.markdown(answer)
+        
+        # --- NEW: Display Chunks ---
+        if docs:
+            with st.expander("🔍 View Retrieved Source Chunks"):
+                for i, doc in enumerate(docs):
+                    source = doc.metadata.get("source", "Unknown")
+                    # Highlight keywords in the chunk
+                    highlighted_text = highlight_text(doc.page_content, user_input)
+                    st.markdown(f"**Chunk {i+1}** (Source: `{source}`)")
+                    st.caption(highlighted_text, unsafe_allow_html=True)
+                    st.divider()
+        # ---------------------------
 
-    st.session_state.messages.append(
-        {"role": "assistant", "content": answer}
-    )
+    st.session_state.messages.append({"role": "assistant", "content": answer})
