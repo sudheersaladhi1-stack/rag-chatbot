@@ -82,6 +82,8 @@ embedding_model = SentenceTransformerEmbeddings(
     model_name="all-MiniLM-L6-v2"
 )
 
+
+
 def get_vectorstore(collection):
     return Chroma(
         collection_name=collection,
@@ -221,15 +223,16 @@ for msg in st.session_state.messages:
 user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 
 if user_input:
-    # 1️⃣ Show user message
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    # 1️⃣ show user message immediately
+    st.session_state.messages.append(
+        {"role": "user", "content": user_input}
+    )
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # 2️⃣ Retrieve documents
+    # retrieve
     raw_docs = retriever.invoke(user_input)
-    
-    # Deduplicate and limit
+
     seen, docs = set(), []
     for d in raw_docs:
         t = d.page_content.strip()
@@ -239,11 +242,12 @@ if user_input:
         if len(docs) == 3:
             break
 
-    # 3️⃣ Generate Answer
     if not docs:
         answer = "I don't know based on the provided context."
     else:
         context = format_docs(docs)
+
+        # person mismatch guard
         if extract_person_names(user_input) - extract_person_names(context):
             answer = "I don't know based on the provided context."
         else:
@@ -252,20 +256,10 @@ if user_input:
                 config={"configurable": {"session_id": st.session_state.session_id}},
             )
 
-    # 4️⃣ Display assistant response and Chunks
+    # assistant
     with st.chat_message("assistant"):
         st.markdown(answer)
-        
-        # --- NEW: Display Chunks ---
-        if docs:
-            with st.expander("🔍 View Retrieved Source Chunks"):
-                for i, doc in enumerate(docs):
-                    source = doc.metadata.get("source", "Unknown")
-                    # Highlight keywords in the chunk
-                    highlighted_text = highlight_text(doc.page_content, user_input)
-                    st.markdown(f"**Chunk {i+1}** (Source: `{source}`)")
-                    st.caption(highlighted_text, unsafe_allow_html=True)
-                    st.divider()
-        # ---------------------------
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+    st.session_state.messages.append(
+        {"role": "assistant", "content": answer}
+    )
