@@ -28,13 +28,19 @@ qa_prompt = ChatPromptTemplate.from_messages(
             """
 You MUST answer strictly and only from the provided Context.
 
+Special rule for greetings:
+- If the user's input is ONLY a greeting (e.g., hi, hello, hey),
+  you may respond with a polite greeting.
+- After greeting, attempt to answer ONLY if the Context contains relevant information.
+- If no relevant information exists in Context, say exactly:
+"I don't know based on the provided context."
+
 Rules:
 - Use ONLY information explicitly present in Context.
-- DO NOT use prior chat history, world knowledge, or assumptions.
+- DO NOT use prior chat history or world knowledge.
 - DO NOT infer or guess missing information.
-- If the answer is NOT explicitly stated in Context, reply EXACTLY:"I don't know based on the provided context.
-- "You MUST answer strictly and only from the provided Context."
-"
+- If the answer is NOT explicitly stated in Context, reply EXACTLY:
+"I don't know based on the provided context."
 
 Context:
 {context}
