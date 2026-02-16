@@ -49,10 +49,25 @@ def get_vectorstore(collection: str):
 
 
 def get_retriever(collection: str):
-    return get_vectorstore(collection).as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": 6, "fetch_k": 20},
-    )
+    vs = get_vectorstore(collection)
+
+    doc_count = vs._collection.count()
+
+    # 🔐 SAFETY: MMR only if enough docs
+    if doc_count >= 20:
+        return vs.as_retriever(
+            search_type="mmr",
+            search_kwargs={
+                "k": 6,
+                "fetch_k": min(30, doc_count),
+            },
+        )
+    else:
+        # ✅ Stable fallback
+        return vs.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": min(6, doc_count)},
+        )
 
 
 # =====================================================
@@ -277,7 +292,14 @@ if user_input:
     # Retrieve documents
     # -------------------------------------------------
     retriever = get_retriever(collection_name)
-    raw_docs = retriever.invoke(normalized_query)
+    try:
+        raw_docs = retriever.invoke(normalized_query)
+    except Exception as e:
+        st.warning("Retriever fallback activated.")
+        raw_docs = get_vectorstore(collection_name).similarity_search(
+            normalized_query, k=3
+        )
+
 
     # -------------------------------------------------
     # Debug panel – highlighted chunks
