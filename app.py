@@ -14,7 +14,7 @@ from langchain_core.documents import Document
 from src.rag_chain import rag_chain
 from src.rag_chat_memory import with_memory, store
 
-# ✅ Wrap chain with memory (CRITICAL)
+# 🔐 Wrap chain with memory (SAFE)
 rag_chain_with_memory = with_memory(rag_chain)
 
 # =====================================================
@@ -64,6 +64,9 @@ def extract_person_names(text: str):
 
 
 def highlight_text(text: str, query: str):
+    """
+    Highlight query terms inside retrieved chunks.
+    """
     text = html.escape(text)
     words = re.findall(r"\w+", query.lower())
 
@@ -138,23 +141,24 @@ def ingest_documents(docs):
             f"{collection_name}:{src}:{ingest_id}:{text}".encode()
         ).hexdigest()
 
-    valid_chunks = {}
+    clean_chunks = {}
     for c in chunks:
         if not c.page_content or len(c.page_content.strip()) < 30:
             continue
+
         src = c.metadata.get("source", "unknown")
         c.metadata["collection"] = collection_name
         uid = make_id(c.page_content, src)
-        valid_chunks[uid] = c
+        clean_chunks[uid] = c
 
-    if not valid_chunks:
+    if not clean_chunks:
         st.warning("No valid chunks found.")
         return
 
     vs = get_vectorstore(collection_name)
     vs.add_documents(
-        documents=list(valid_chunks.values()),
-        ids=list(valid_chunks.keys()),
+        documents=list(clean_chunks.values()),
+        ids=list(clean_chunks.keys()),
     )
 
 # =====================================================
@@ -235,14 +239,14 @@ user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 if user_input:
     normalized_query = user_input.strip()
 
+    # User message
     st.session_state.messages.append(
         {"role": "user", "content": normalized_query}
     )
-
     with st.chat_message("user"):
         st.markdown(normalized_query)
 
-    # 👋 Greeting handling
+    # 👋 Greeting logic (kept separate from RAG)
     greetings = {"hi", "hello", "hey", "hai", "hii"}
     if normalized_query.lower() in greetings:
         greeting_text = "Hello 👋 How can I help you?"
@@ -253,11 +257,11 @@ if user_input:
         )
         st.stop()
 
-    # 🔍 Retrieve docs
+    # 🔍 Retrieve
     retriever = get_retriever(collection_name)
     raw_docs = retriever.invoke(normalized_query)
 
-    # 🔎 Debug view
+    # 🔎 Debug panel
     with st.expander("🔍 Retrieved chunks (highlighted)"):
         st.write(f"Retrieved {len(raw_docs)} chunks")
         for i, d in enumerate(raw_docs[:3]):
@@ -267,7 +271,7 @@ if user_input:
                 unsafe_allow_html=True,
             )
 
-    # Deduplicate
+    # Deduplicate & limit
     seen, docs = set(), []
     for d in raw_docs:
         t = d.page_content.strip()
@@ -277,18 +281,26 @@ if user_input:
         if len(docs) == 3:
             break
 
+    # Strict answering
     if not docs:
         answer = "I don't know based on the provided context."
     else:
         context = format_docs(docs)
+
+        # Cross-document safety
         if extract_person_names(normalized_query) - extract_person_names(context):
             answer = "I don't know based on the provided context."
         else:
             answer = rag_chain_with_memory.invoke(
                 {"input": normalized_query, "context": context},
-                config={"configurable": {"session_id": st.session_state.session_id}},
+                config={
+                    "configurable": {
+                        "session_id": st.session_state.session_id
+                    }
+                },
             )
 
+    # Assistant message
     with st.chat_message("assistant"):
         st.markdown(answer)
 
