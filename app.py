@@ -312,13 +312,9 @@ if user_input:
         else:
             rag_chain_with_memory = with_memory(rag_chain)
             answer = rag_chain_with_memory.invoke(
-                {"input": normalized_query, "context": context},
-                config={
-                    "configurable": {
-                        "session_id": st.session_state.session_id
-                    }
-                },
-            )
+    user_input, # Pass the string directly
+    config={"configurable": {"session_id": st.session_state.session_id}},
+)
 
     # -------------------------------------------------
     # Show assistant
