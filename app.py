@@ -132,53 +132,45 @@ def ingest_documents(docs):
 
     ingest_id = uuid4().hex
 
-    def make_id(text, src):
-        return hashlib.md5(
-            f"{collection_name}:{src}:{ingest_id}:{text}".encode()
-        ).hexdigest()
-
-    clean_chunks = {}
-    for c in chunks:
-        if not c.page_content or len(c.page_content.strip()) < 30:
-            continue
-
-        # 🔒 SAFE METADATA SANITIZATION
-        safe_metadata = {}
-        for k, v in c.metadata.items():
-            if v is None:
-                continue
-            safe_metadata[str(k)] = str(v)
-
-        safe_metadata["collection"] = collection_name
-
-        c.metadata = safe_metadata
-
-        src = safe_metadata.get("source", "unknown")
-        uid = make_id(c.page_content, src)
-        clean_chunks[uid] = c
-
-
-    if not clean_chunks:
-        st.warning("No valid chunks found.")
-        return
-    vs = get_vectorstore(collection_name)
-    
-    
     texts = []
     metadatas = []
     ids = []
 
-    for uid, doc in clean_chunks.items():
-        texts.append(doc.page_content)
-        metadatas.append(doc.metadata)
-        ids.append(uid)
+    for i, c in enumerate(chunks):
+        content = c.page_content.strip()
+        if not content or len(content) < 30:
+            continue
+
+        # ✅ HARD METADATA SANITIZATION (CRITICAL)
+        safe_metadata = {
+            "source": str(c.metadata.get("source", "unknown")),
+            "collection": str(collection_name),
+            "chunk_index": str(i),
+            "ingest_id": ingest_id,
+        }
+
+        texts.append(content)
+        metadatas.append(safe_metadata)
+        ids.append(
+            hashlib.md5(
+                f"{collection_name}:{ingest_id}:{i}:{content}".encode()
+            ).hexdigest()
+        )
+
+    if not texts:
+        st.warning("No valid chunks found.")
+        return
 
     vs = get_vectorstore(collection_name)
+
     vs.add_texts(
         texts=texts,
         metadatas=metadatas,
         ids=ids,
     )
+
+    vs.persist()
+
 
 
 # =====================================================
