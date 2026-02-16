@@ -10,7 +10,9 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.documents import Document
 
-from src.rag_chat_memory import rag_chain_with_memory, store
+from src.rag_chat_memory import with_memory, store
+from src.rag_chain import rag_chain
+
 
 
 # =====================================================
@@ -249,23 +251,51 @@ for msg in st.session_state.messages:
 user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 
 if user_input:
+    # -------------------------------
+    # 1️⃣ Normalize input (CRITICAL FIX)
+    # -------------------------------
+    normalized_query = user_input.strip()
+
     st.session_state.messages.append(
-        {"role": "user", "content": user_input}
+        {"role": "user", "content": normalized_query}
     )
+
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.markdown(normalized_query)
 
+    # -------------------------------
+    # 2️⃣ Greeting handling (BEFORE retrieval)
+    # -------------------------------
+    greetings = {"hi", "hello", "hey", "hai", "hii"}
+    if normalized_query.lower() in greetings:
+        greeting_text = "Hello 👋 How can I help you?"
+        with st.chat_message("assistant"):
+            st.markdown(greeting_text)
+
+        st.session_state.messages.append(
+            {"role": "assistant", "content": greeting_text}
+        )
+        st.stop()
+
+    # -------------------------------
+    # 3️⃣ Retrieve documents
+    # -------------------------------
     retriever = get_retriever(collection_name)
-    raw_docs = retriever.invoke(user_input)
+    raw_docs = retriever.invoke(normalized_query)
 
-    # 🔥 Highlighted Debug Panel
+    # -------------------------------
+    # 🔍 Debug: Highlighted chunks
+    # -------------------------------
     with st.expander("🔍 Retrieved chunks (highlighted)"):
         st.write(f"Retrieved {len(raw_docs)} chunks")
         for i, d in enumerate(raw_docs[:3]):
             st.markdown(f"**Chunk {i+1}:**")
-            highlighted = highlight_text(d.page_content[:1000], user_input)
+            highlighted = highlight_text(d.page_content[:1000], normalized_query)
             st.markdown(highlighted, unsafe_allow_html=True)
 
+    # -------------------------------
+    # 4️⃣ De-duplicate + limit chunks
+    # -------------------------------
     seen, docs = set(), []
     for d in raw_docs:
         t = d.page_content.strip()
@@ -275,26 +305,37 @@ if user_input:
         if len(docs) == 3:
             break
 
+    # -------------------------------
+    # 5️⃣ Strict answer rules
+    # -------------------------------
     if not docs:
         answer = "I don't know based on the provided context."
     else:
         context = format_docs(docs)
 
-        if extract_person_names(user_input) - extract_person_names(context):
+        # Person mismatch safety (prevents wrong-doc answers)
+        if extract_person_names(normalized_query) - extract_person_names(context):
             answer = "I don't know based on the provided context."
         else:
             answer = rag_chain_with_memory.invoke(
-                {"input": user_input, "context": context},
+                {
+                    "input": normalized_query,
+                    "context": context
+                },
                 config={
                     "configurable": {
                         "session_id": st.session_state.session_id
                     }
-                },
+                }
             )
 
+    # -------------------------------
+    # 6️⃣ Display assistant message
+    # -------------------------------
     with st.chat_message("assistant"):
         st.markdown(answer)
 
     st.session_state.messages.append(
         {"role": "assistant", "content": answer}
     )
+
