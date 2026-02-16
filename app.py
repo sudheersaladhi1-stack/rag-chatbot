@@ -1,18 +1,30 @@
-import streamlit as st
+"""Streamlit RAG Chatbot — PDF / TXT / URL ingestion with strict RAG answering."""
+
+import hashlib
+import html
+import logging
+import os
+import re
+import tempfile
 from uuid import uuid4
-import os, re, hashlib, requests, html
+
+import requests
+import streamlit as st
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from urllib.parse import urlparse
 
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain_core.documents import Document
-
-from src.rag_chain import rag_chain
 from src.rag_chat_memory import rag_chain_with_memory, store
 
+# Load .env once, at the entry point
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # =====================================================
 # Streamlit config
@@ -21,21 +33,27 @@ st.set_page_config(page_title="RAG Chatbot", page_icon="🤖", layout="centered"
 st.title("🤖 RAG Chatbot")
 st.caption("PDF / TXT / URL → Strict RAG (No Hallucination)")
 
-# =====================================================
-# Embeddings & Vectorstore
-# =====================================================
-embedding_model = SentenceTransformerEmbeddings(
-    model_name="all-MiniLM-L6-v2"
-)
-
 CHROMA_DIR = "chroma_db"
 
-def get_vectorstore(collection: str):
+
+# =====================================================
+# Cached resources  (FIX: was re-instantiated on every rerun)
+# =====================================================
+@st.cache_resource
+def get_embedding_model() -> SentenceTransformerEmbeddings:
+    """Load the sentence-transformer embedding model once per process."""
+    return SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+
+
+@st.cache_resource
+def get_vectorstore(collection: str) -> Chroma:
+    """Return a cached Chroma vectorstore for the given collection."""
     return Chroma(
         collection_name=collection,
         persist_directory=CHROMA_DIR,
-        embedding_function=embedding_model,
+        embedding_function=get_embedding_model(),
     )
+
 
 def get_retriever(collection: str):
     return get_vectorstore(collection).as_retriever(
@@ -43,10 +61,12 @@ def get_retriever(collection: str):
         search_kwargs={"k": 6, "fetch_k": 20},
     )
 
+
 # =====================================================
 # Utilities
 # =====================================================
-def normalize_query(q: str):
+def normalize_query(q: str) -> str | None:
+    """Return a cleaned query string, or None if the query is too weak."""
     q = q.strip()
     if not q:
         return None
@@ -56,16 +76,14 @@ def normalize_query(q: str):
         return None
     return q
 
-def format_docs(docs):
+
+def format_docs(docs: list[Document]) -> str:
     return "\n\n".join(d.page_content for d in docs)
 
-def extract_person_names(text: str):
-    return {w.lower() for w in re.findall(r"[A-Z][a-z]+", text)}
 
-def highlight_text(text: str, query: str):
+def highlight_text(text: str, query: str) -> str:
     text = html.escape(text)
     words = re.findall(r"\w+", query.lower())
-
     for word in set(words):
         if len(word) < 3:
             continue
@@ -76,16 +94,17 @@ def highlight_text(text: str, query: str):
         )
     return text
 
+
 # =====================================================
 # URL Loader
 # =====================================================
-def load_url_as_documents(url: str):
+def load_url_as_documents(url: str) -> list[Document]:
     r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
     r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "html.parser")
-    for t in soup(["script", "style", "nav", "footer", "header", "noscript"]):
-        t.decompose()
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
+        tag.decompose()
 
     text = "\n".join(
         line.strip()
@@ -104,6 +123,46 @@ def load_url_as_documents(url: str):
         )
     ]
 
+
+# =====================================================
+# Ingestion
+# FIX: collection_name is now an explicit parameter,
+#      not captured from outer scope via closure.
+# =====================================================
+def ingest_documents(docs: list[Document], collection: str) -> None:
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=600,
+        chunk_overlap=150,
+    )
+    chunks = splitter.split_documents(docs)
+    vs = get_vectorstore(collection)
+
+    for i, chunk in enumerate(chunks):
+        content = chunk.page_content.strip()
+        if not content or len(content) < 30:
+            continue
+
+        metadata = {
+            "source": str(chunk.metadata.get("source", "unknown")),
+            "collection": str(collection),
+            "chunk": str(i),
+        }
+
+        chunk_id = hashlib.md5(
+            f"{collection}:{uuid4().hex}:{i}".encode()
+        ).hexdigest()
+
+        try:
+            vs.add_texts(
+                texts=[content],
+                metadatas=[metadata],
+                ids=[chunk_id],
+            )
+        except Exception as exc:  # FIX: include exception detail in the warning
+            st.warning(f"Skipped chunk {i}: {exc}")
+            logger.warning("Chunk %d ingestion failed: %s", i, exc)
+
+
 # =====================================================
 # Sidebar
 # =====================================================
@@ -121,66 +180,27 @@ st.sidebar.header("🌐 Add Website URL")
 url_input = st.sidebar.text_input("Enter website URL")
 
 # =====================================================
-# Ingestion
-# =====================================================
-def ingest_documents(docs):
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,
-        chunk_overlap=150,
-    )
-    chunks = splitter.split_documents(docs)
-
-    vs = get_vectorstore(collection_name)
-
-    for i, c in enumerate(chunks):
-        content = c.page_content.strip()
-        if not content or len(content) < 30:
-            continue
-
-        # 🔐 ultra-safe metadata
-        metadata = {
-            "source": str(c.metadata.get("source", "unknown")),
-            "collection": str(collection_name),
-            "chunk": str(i),
-        }
-
-        chunk_id = hashlib.md5(
-            f"{collection_name}:{uuid4().hex}:{i}".encode()
-        ).hexdigest()
-
-        try:
-            vs.add_texts(
-                texts=[content],
-                metadatas=[metadata],
-                ids=[chunk_id],
-            )
-        except Exception as e:
-            st.warning(f"Skipped one chunk due to ingestion error")
-            continue
-
-
-# =====================================================
 # Ingest Actions
 # =====================================================
 if st.sidebar.button("📥 Ingest documents"):
     if not uploaded_files:
         st.sidebar.warning("Upload at least one file")
     else:
-        docs = []
+        docs: list[Document] = []
         for f in uploaded_files:
-            tmp = f"tmp_{f.name}"
-            with open(tmp, "wb") as t:
-                t.write(f.read())
+            # FIX: use tempfile to avoid name collisions and CWD pollution
+            suffix = ".pdf" if f.name.endswith(".pdf") else ".txt"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(f.read())
+                tmp_path = tmp.name
 
-            loader = (
-                PyPDFLoader(tmp)
-                if f.name.endswith(".pdf")
-                else TextLoader(tmp)
-            )
-            docs.extend(loader.load())
-            os.remove(tmp)
+            try:
+                loader = PyPDFLoader(tmp_path) if suffix == ".pdf" else TextLoader(tmp_path)
+                docs.extend(loader.load())
+            finally:
+                os.remove(tmp_path)
 
-        ingest_documents(docs)
+        ingest_documents(docs, collection_name)
         st.sidebar.success("Documents ingested ✅")
         st.rerun()
 
@@ -188,7 +208,7 @@ if st.sidebar.button("🌍 Ingest URL"):
     if not url_input:
         st.sidebar.warning("Enter a valid URL")
     else:
-        ingest_documents(load_url_as_documents(url_input))
+        ingest_documents(load_url_as_documents(url_input), collection_name)
         st.sidebar.success("Website ingested ✅")
         st.rerun()
 
@@ -214,7 +234,7 @@ st.session_state.setdefault("session_id", str(uuid4()))
 st.session_state.setdefault("messages", [])
 
 # =====================================================
-# Disable chat if empty
+# Disable chat if knowledge base is empty
 # =====================================================
 doc_count = get_vectorstore(collection_name)._collection.count()
 st.sidebar.caption(f"📄 Documents in DB: {doc_count}")
@@ -224,7 +244,7 @@ if doc_count == 0:
     st.stop()
 
 # =====================================================
-# Show chat history
+# Chat history
 # =====================================================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -238,28 +258,26 @@ user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 if user_input:
     normalized_query = normalize_query(user_input)
 
-    st.session_state.messages.append(
-        {"role": "user", "content": user_input}
-    )
+    st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # 🔹 Greeting / weak query handling
+    # Greeting / weak query — respond and stop
     if normalized_query is None:
         answer = "Hello 👋 How can I help you?"
+        st.session_state.messages.append({"role": "assistant", "content": answer})
         with st.chat_message("assistant"):
             st.markdown(answer)
-        st.session_state.messages.append(
-            {"role": "assistant", "content": answer}
-        )
         st.stop()
 
-    # 🔹 Retrieval (crash-proof)
-    raw_docs = []
+    # ── Retrieval (crash-proof) ───────────────────────────────────────────────
+    raw_docs: list[Document] = []
     try:
         retriever = get_retriever(collection_name)
         raw_docs = retriever.invoke(normalized_query)
-    except Exception:
+    except Exception as exc:  # FIX: log instead of silently swallowing
+        logger.warning("MMR retrieval failed (%s), falling back to raw fetch.", exc)
+        st.warning(f"Retrieval degraded, using fallback. ({exc})")
         try:
             data = get_vectorstore(collection_name)._collection.get(
                 include=["documents", "metadatas"],
@@ -272,10 +290,12 @@ if user_input:
                     data.get("metadatas", []),
                 )
             ]
-        except Exception:
+        except Exception as exc2:
+            logger.error("Fallback retrieval also failed: %s", exc2)
+            st.error(f"Could not retrieve any documents: {exc2}")
             raw_docs = []
 
-    # 🔍 Debug panel
+    # ── Debug panel ──────────────────────────────────────────────────────────
     with st.expander("🔍 Retrieved chunks (highlighted)"):
         st.write(f"Retrieved {len(raw_docs)} chunks")
         for i, d in enumerate(raw_docs[:3]):
@@ -285,8 +305,9 @@ if user_input:
                 unsafe_allow_html=True,
             )
 
-    # 🔹 Deduplicate
-    seen, docs = set(), []
+    # ── Deduplicate ──────────────────────────────────────────────────────────
+    seen: set[str] = set()
+    docs: list[Document] = []
     for d in raw_docs:
         t = d.page_content.strip()
         if t and t not in seen:
@@ -295,22 +316,20 @@ if user_input:
         if len(docs) == 3:
             break
 
-    # 🔹 Strict answering
+    # ── Answer ───────────────────────────────────────────────────────────────
     if not docs:
         answer = "I don't know based on the provided context."
     else:
         context = format_docs(docs)
-        if extract_person_names(normalized_query) - extract_person_names(context):
-            answer = "I don't know based on the provided context."
-        else:
-            answer = rag_chain_with_memory.invoke(
-                {"input": normalized_query, "context": context},
-                config={"configurable": {"session_id": st.session_state.session_id}},
-            )
+        # FIX: removed unreliable extract_person_names() guard — it matched any
+        # capitalised word (months, cities, common nouns) causing false refusals.
+        # The LLM's own strict system prompt handles hallucination prevention.
+        answer = rag_chain_with_memory.invoke(
+            {"input": normalized_query, "context": context},
+            config={"configurable": {"session_id": st.session_state.session_id}},
+        )
 
     with st.chat_message("assistant"):
         st.markdown(answer)
 
-    st.session_state.messages.append(
-        {"role": "assistant", "content": answer}
-    )
+    st.session_state.messages.append({"role": "assistant", "content": answer})
