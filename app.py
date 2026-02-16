@@ -11,7 +11,11 @@ from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.documents import Document
 
 from src.rag_chain import rag_chain
-from src.rag_chat_memory import with_memory, store
+
+from src.rag_chat_memory import with_memory
+
+rag_chain_with_memory = with_memory(rag_chain)
+
 
 
 # =====================================================
@@ -312,13 +316,10 @@ if user_input:
         else:
             rag_chain_with_memory = with_memory(rag_chain)
             answer = rag_chain_with_memory.invoke(
-                {"input": normalized_query, "context": context},
-                config={
-                    "configurable": {
-                        "session_id": st.session_state.session_id
-                    }
-                },
-            )
+                    {"input": normalized_query, "context": context},
+                    config={"configurable": {"session_id": st.session_state.session_id}},
+                    )
+
 
     # -------------------------------------------------
     # Show assistant
