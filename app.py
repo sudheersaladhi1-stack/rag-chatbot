@@ -10,7 +10,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.documents import Document
 
-from src.rag_chat_memory import rag_chain_with_memory, store
+from src.rag_chat_memory import rag_chain_memory, store
 from src.rag_chain import rag_chain
 
 
