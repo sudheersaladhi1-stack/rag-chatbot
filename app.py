@@ -3,7 +3,6 @@ from uuid import uuid4
 import os, re, hashlib, requests, html
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from chromadb.config import Settings
 
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -36,12 +35,6 @@ def get_vectorstore(collection: str):
         collection_name=collection,
         persist_directory=CHROMA_DIR,
         embedding_function=embedding_model,
-        # Add this 'client_settings' block:
-        client_settings=Settings(
-            is_persistent=True,
-            persist_directory=CHROMA_DIR,
-            chroma_api_impl="chromadb.api.segment.SegmentAPI" 
-        )
     )
 
 def get_retriever(collection: str):
@@ -177,6 +170,7 @@ def ingest_documents(docs):
     )
 
     vs.persist()
+
 
 
 
