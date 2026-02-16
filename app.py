@@ -311,12 +311,14 @@ if user_input:
             answer = "I don't know based on the provided context."
         else:
             rag_chain_with_memory = with_memory(rag_chain)
-            # Pass a dictionary so itemgetter("input") and itemgetter("context") work
             answer = rag_chain_with_memory.invoke(
-                    {"input": user_input, "context": context}, 
-                config={"configurable": {"session_id": st.session_state.session_id}},
-                    )
-
+                {"input": normalized_query, "context": context},
+                config={
+                    "configurable": {
+                        "session_id": st.session_state.session_id
+                    }
+                },
+            )
 
     # -------------------------------------------------
     # Show assistant
