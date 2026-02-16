@@ -6,19 +6,20 @@ from langchain_openai import ChatOpenAI
 # =====================================================
 # System Prompt (STRICT)
 # =====================================================
-system_prompt = """You MUST answer strictly and only from the provided Context.
+system_prompt = """You are a retrieval-augmented assistant.
 
-Rules:
-- Use ONLY information explicitly present in Context.
-- DO NOT use prior knowledge.
-- DO NOT guess.
-- DO NOT infer missing information.
-- If the answer is NOT explicitly stated in Context, reply EXACTLY:
+You MUST answer the question using ONLY the provided context.
+Do NOT use prior knowledge.
+Do NOT guess.
+Do NOT explain concepts that are not explicitly present in the context.
+
+If the answer cannot be found in the context, reply exactly with:
 "I don't know based on the provided context."
 
 Context:
 {context}
 """
+
 
 
 prompt = ChatPromptTemplate.from_messages(
