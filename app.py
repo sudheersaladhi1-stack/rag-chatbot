@@ -130,48 +130,33 @@ def ingest_documents(docs):
     )
     chunks = splitter.split_documents(docs)
 
-    ingest_id = uuid4().hex
-
-    texts = []
-    metadatas = []
-    ids = []
+    vs = get_vectorstore(collection_name)
 
     for i, c in enumerate(chunks):
         content = c.page_content.strip()
         if not content or len(content) < 30:
             continue
 
-        # ✅ HARD METADATA SANITIZATION (CRITICAL)
-        safe_metadata = {
+        # 🔐 ultra-safe metadata
+        metadata = {
             "source": str(c.metadata.get("source", "unknown")),
             "collection": str(collection_name),
-            "chunk_index": str(i),
-            "ingest_id": ingest_id,
+            "chunk": str(i),
         }
 
-        texts.append(content)
-        metadatas.append(safe_metadata)
-        ids.append(
-            hashlib.md5(
-                f"{collection_name}:{ingest_id}:{i}:{content}".encode()
-            ).hexdigest()
-        )
+        chunk_id = hashlib.md5(
+            f"{collection_name}:{uuid4().hex}:{i}".encode()
+        ).hexdigest()
 
-    if not texts:
-        st.warning("No valid chunks found.")
-        return
-
-    vs = get_vectorstore(collection_name)
-
-    vs.add_texts(
-        texts=texts,
-        metadatas=metadatas,
-        ids=ids,
-    )
-
-    vs.persist()
-
-
+        try:
+            vs.add_texts(
+                texts=[content],
+                metadatas=[metadata],
+                ids=[chunk_id],
+            )
+        except Exception as e:
+            st.warning(f"Skipped one chunk due to ingestion error")
+            continue
 
 
 # =====================================================
