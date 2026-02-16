@@ -1,42 +1,33 @@
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.llms import Ollama
 from langchain_openai import ChatOpenAI
 
 
-# Load embeddings
-embedding_model = SentenceTransformerEmbeddings(
-    model_name="all-MiniLM-L6-v2"
-)
+# =====================================================
+# STRICT SYSTEM PROMPT (NO HALLUCINATION)
+# =====================================================
+system_prompt = """
+You are a retrieval-augmented assistant.
 
+You MUST answer strictly and only from the provided Context.
 
-# Load vector DB
-vectorstore = Chroma(
-    persist_directory="chroma_db",
-    embedding_function=embedding_model
-)
+Special rule for greetings:
+- If the user's input is ONLY a greeting (hi, hello, hey),
+  you may respond politely.
+- Do NOT add any factual information unless it exists in Context.
 
-# Create retriever
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-
-# System prompt
-system_prompt = """You are a retrieval-augmented assistant.
-
-You MUST answer the question using ONLY the provided context.
-Do NOT use prior knowledge.
-Do NOT guess.
-Do NOT explain concepts that are not explicitly present in the context.
-
-If the answer cannot be found in the context, reply exactly with:
+Rules:
+- Use ONLY information explicitly present in Context.
+- DO NOT use prior knowledge.
+- DO NOT infer or guess.
+- DO NOT explain anything not stated in Context.
+- If the answer cannot be found in Context, reply EXACTLY:
 "I don't know based on the provided context."
 
 Context:
 {context}
 """
-
 
 prompt = ChatPromptTemplate.from_messages(
     [
@@ -45,26 +36,21 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-# Format documents
-def format_docs(docs):
-    if not docs:
-        return ""
-    return "\n\n".join(doc.page_content for doc in docs)
-
-# Local LLM
-# llm = Ollama(
-#     model="mistral",
-#     temperature=0
-# )
+# =====================================================
+# LLM
+# =====================================================
 llm = ChatOpenAI(
-    model="gpt-4o-mini",   # best cost/quality for RAG
+    model="gpt-4o-mini",   # best cost / quality for RAG
     temperature=0.2,
 )
 
-# Build LCEL RAG chain
+# =====================================================
+# RAG CHAIN (NO RETRIEVAL INSIDE)
+# Context MUST be passed from app.py
+# =====================================================
 rag_chain = (
     {
-        "context": retriever | format_docs,
+        "context": RunnablePassthrough(),
         "input": RunnablePassthrough()
     }
     | prompt
@@ -72,9 +58,14 @@ rag_chain = (
     | StrOutputParser()
 )
 
-# Test
+# =====================================================
+# Local test (optional)
+# =====================================================
 if __name__ == "__main__":
+    test_context = "Machine learning is a subset of artificial intelligence."
     question = "What is machine learning?"
-    answer = rag_chain.invoke(question)
-    print("\nQuestion:", question)
-    print("Answer:", answer)
+    answer = rag_chain.invoke(
+        {"input": question, "context": test_context}
+    )
+    print("Q:", question)
+    print("A:", answer)

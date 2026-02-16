@@ -10,13 +10,18 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.documents import Document
 
-from src.rag_chat_memory import rag_chain_with_memory, store
+from src.rag_chain import rag_chain
+from src.rag_chat_memory import with_memory, store
 
 
 # =====================================================
 # Streamlit config
 # =====================================================
-st.set_page_config(page_title="RAG Chatbot", page_icon="🤖", layout="centered")
+st.set_page_config(
+    page_title="RAG Chatbot",
+    page_icon="🤖",
+    layout="centered",
+)
 st.title("🤖 RAG Chatbot")
 st.caption("PDF / TXT / URL → Strict RAG (No Hallucination)")
 
@@ -41,8 +46,8 @@ def get_vectorstore(collection: str):
 
 def get_retriever(collection: str):
     return get_vectorstore(collection).as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 6},
+        search_type="mmr",
+        search_kwargs={"k": 6, "fetch_k": 20},
     )
 
 
@@ -57,23 +62,22 @@ def extract_person_names(text: str):
     return {w.lower() for w in re.findall(r"[A-Z][a-z]+", text)}
 
 
-# ✅ NEW: Highlight function
 def highlight_text(text: str, query: str):
     """
-    Highlights matching query terms inside retrieved chunk text.
+    Highlight matching query terms inside retrieved chunks.
     """
-    text = html.escape(text)
+    safe_text = html.escape(text)
     words = re.findall(r"\w+", query.lower())
 
     for word in set(words):
         if len(word) < 3:
             continue
         pattern = re.compile(rf"({re.escape(word)})", re.IGNORECASE)
-        text = pattern.sub(
-            r"<mark style='background-color: #ffe066'>\1</mark>",
-            text,
+        safe_text = pattern.sub(
+            r"<mark style='background-color:#ffe066'>\1</mark>",
+            safe_text,
         )
-    return text
+    return safe_text
 
 
 # =====================================================
@@ -130,8 +134,8 @@ def ingest_documents(docs):
         chunk_size=600,
         chunk_overlap=150,
     )
-    chunks = splitter.split_documents(docs)
 
+    chunks = splitter.split_documents(docs)
     ingest_id = uuid4().hex
 
     def make_id(text, src):
@@ -173,11 +177,7 @@ if st.sidebar.button("📥 Ingest documents"):
             with open(tmp, "wb") as t:
                 t.write(f.read())
 
-            loader = (
-                PyPDFLoader(tmp)
-                if f.name.endswith(".pdf")
-                else TextLoader(tmp)
-            )
+            loader = PyPDFLoader(tmp) if f.name.endswith(".pdf") else TextLoader(tmp)
             docs.extend(loader.load())
             os.remove(tmp)
 
@@ -246,23 +246,50 @@ for msg in st.session_state.messages:
 user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 
 if user_input:
+    normalized_query = user_input.strip()
+
+    # Show user message
     st.session_state.messages.append(
-        {"role": "user", "content": user_input}
+        {"role": "user", "content": normalized_query}
     )
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.markdown(normalized_query)
 
+    # -------------------------------------------------
+    # Greeting handling (BEFORE retrieval)
+    # -------------------------------------------------
+    greetings = {"hi", "hello", "hey", "hai", "hii"}
+    if normalized_query.lower() in greetings:
+        greeting_text = "Hello 👋 How can I help you?"
+        with st.chat_message("assistant"):
+            st.markdown(greeting_text)
+
+        st.session_state.messages.append(
+            {"role": "assistant", "content": greeting_text}
+        )
+        st.stop()
+
+    # -------------------------------------------------
+    # Retrieve documents
+    # -------------------------------------------------
     retriever = get_retriever(collection_name)
-    raw_docs = retriever.invoke(user_input)
+    raw_docs = retriever.invoke(normalized_query)
 
-    # 🔥 Highlighted Debug Panel
+    # -------------------------------------------------
+    # Debug panel – highlighted chunks
+    # -------------------------------------------------
     with st.expander("🔍 Retrieved chunks (highlighted)"):
         st.write(f"Retrieved {len(raw_docs)} chunks")
         for i, d in enumerate(raw_docs[:3]):
             st.markdown(f"**Chunk {i+1}:**")
-            highlighted = highlight_text(d.page_content[:1000], user_input)
+            highlighted = highlight_text(
+                d.page_content[:1000], normalized_query
+            )
             st.markdown(highlighted, unsafe_allow_html=True)
 
+    # -------------------------------------------------
+    # Deduplicate + limit
+    # -------------------------------------------------
     seen, docs = set(), []
     for d in raw_docs:
         t = d.page_content.strip()
@@ -272,16 +299,20 @@ if user_input:
         if len(docs) == 3:
             break
 
+    # -------------------------------------------------
+    # Strict answering rules
+    # -------------------------------------------------
     if not docs:
         answer = "I don't know based on the provided context."
     else:
         context = format_docs(docs)
 
-        if extract_person_names(user_input) - extract_person_names(context):
+        if extract_person_names(normalized_query) - extract_person_names(context):
             answer = "I don't know based on the provided context."
         else:
+            rag_chain_with_memory = with_memory(rag_chain)
             answer = rag_chain_with_memory.invoke(
-                {"input": user_input, "context": context},
+                {"input": normalized_query, "context": context},
                 config={
                     "configurable": {
                         "session_id": st.session_state.session_id
@@ -289,6 +320,9 @@ if user_input:
                 },
             )
 
+    # -------------------------------------------------
+    # Show assistant
+    # -------------------------------------------------
     with st.chat_message("assistant"):
         st.markdown(answer)
 
