@@ -41,8 +41,11 @@ def get_vectorstore(collection: str):
 
 def get_retriever(collection: str):
     return get_vectorstore(collection).as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 6},
+        # search_type="similarity",
+        # search_kwargs={"k": 6},
+            search_type="mmr",
+    search_kwargs={"k": 6, "fetch_k": 20}
+
     )
 
 
