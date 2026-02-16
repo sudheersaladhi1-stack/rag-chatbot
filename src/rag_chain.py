@@ -2,6 +2,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
+from operator import itemgetter
+
 
 
 # =====================================================
@@ -50,14 +52,15 @@ llm = ChatOpenAI(
 # =====================================================
 rag_chain = (
     {
-        "context": RunnablePassthrough(),
-        "input": RunnablePassthrough()
+        # Get 'context' from the dictionary, otherwise pass it through
+        "context": itemgetter("context"), 
+        # Get 'input' from the dictionary
+        "input": itemgetter("input")
     }
     | prompt
     | llm
     | StrOutputParser()
 )
-
 # =====================================================
 # Local test (optional)
 # =====================================================
