@@ -317,10 +317,19 @@ if user_input:
         if extract_person_names(normalized_query) - extract_person_names(context):
             answer = "I don't know based on the provided context."
         else:
-            answer = rag_chain_with_memory.invoke(
-    {"input": normalized_query, "context": context},
-    config={"configurable": {"session_id": st.session_state.session_id}}
-                        )
+            def invoke_runnable(runnable, *args, **kwargs):
+                for name in ("invoke", "run", "apply", "__call__"):
+                    fn = getattr(runnable, name, None)
+                    if callable(fn):
+                        return fn(*args, **kwargs)
+                raise AttributeError("Runnable has no callable invoke/run/apply/__call__")
+
+            answer = invoke_runnable(
+                rag_chain_with_memory,
+                {"input": normalized_query, "context": context},
+                config={"configurable": {"session_id": st.session_state.session_id}},
+            )
+
 
 
     # -------------------------------
