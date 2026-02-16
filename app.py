@@ -142,10 +142,21 @@ def ingest_documents(docs):
         if not c.page_content or len(c.page_content.strip()) < 30:
             continue
 
-        src = c.metadata.get("source", "unknown")
-        c.metadata["collection"] = collection_name
+        # 🔒 SAFE METADATA SANITIZATION
+        safe_metadata = {}
+        for k, v in c.metadata.items():
+            if v is None:
+                continue
+            safe_metadata[str(k)] = str(v)
+
+        safe_metadata["collection"] = collection_name
+
+        c.metadata = safe_metadata
+
+        src = safe_metadata.get("source", "unknown")
         uid = make_id(c.page_content, src)
         clean_chunks[uid] = c
+
 
     if not clean_chunks:
         st.warning("No valid chunks found.")
