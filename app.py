@@ -10,7 +10,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.documents import Document
 
-from src.rag_chat_memory import with_memory, store
+from src.rag_chat_memory import rag_chain_with_memory, store
 from src.rag_chain import rag_chain
 
 
@@ -318,16 +318,10 @@ if user_input:
             answer = "I don't know based on the provided context."
         else:
             answer = rag_chain_with_memory.invoke(
-                {
-                    "input": normalized_query,
-                    "context": context
-                },
-                config={
-                    "configurable": {
-                        "session_id": st.session_state.session_id
-                    }
-                }
-            )
+    {"input": normalized_query, "context": context},
+    config={"configurable": {"session_id": st.session_state.session_id}}
+                        )
+
 
     # -------------------------------
     # 6️⃣ Display assistant message
