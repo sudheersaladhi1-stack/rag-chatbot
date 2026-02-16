@@ -10,23 +10,16 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.documents import Document
 
-# 🔹 RAG core
-from src.rag_chain import rag_chain
-from src.rag_chat_memory import with_memory, store
+from src.rag_chat_memory import rag_chain_with_memory, store
 
-# 🔐 Wrap chain with memory (SAFE)
-rag_chain_with_memory = with_memory(rag_chain)
 
 # =====================================================
 # Streamlit config
 # =====================================================
-st.set_page_config(
-    page_title="RAG Chatbot",
-    page_icon="🤖",
-    layout="centered",
-)
+st.set_page_config(page_title="RAG Chatbot", page_icon="🤖", layout="centered")
 st.title("🤖 RAG Chatbot")
 st.caption("PDF / TXT / URL → Strict RAG (No Hallucination)")
+
 
 # =====================================================
 # Embeddings & Vectorstore
@@ -48,9 +41,10 @@ def get_vectorstore(collection: str):
 
 def get_retriever(collection: str):
     return get_vectorstore(collection).as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": 6, "fetch_k": 20},
+        search_type="similarity",
+        search_kwargs={"k": 6},
     )
+
 
 # =====================================================
 # Utilities
@@ -63,9 +57,10 @@ def extract_person_names(text: str):
     return {w.lower() for w in re.findall(r"[A-Z][a-z]+", text)}
 
 
+# ✅ NEW: Highlight function
 def highlight_text(text: str, query: str):
     """
-    Highlight query terms inside retrieved chunks.
+    Highlights matching query terms inside retrieved chunk text.
     """
     text = html.escape(text)
     words = re.findall(r"\w+", query.lower())
@@ -75,10 +70,11 @@ def highlight_text(text: str, query: str):
             continue
         pattern = re.compile(rf"({re.escape(word)})", re.IGNORECASE)
         text = pattern.sub(
-            r"<mark style='background-color:#ffe066'>\1</mark>",
+            r"<mark style='background-color: #ffe066'>\1</mark>",
             text,
         )
     return text
+
 
 # =====================================================
 # URL Loader
@@ -108,6 +104,7 @@ def load_url_as_documents(url: str):
         )
     ]
 
+
 # =====================================================
 # Sidebar
 # =====================================================
@@ -123,6 +120,7 @@ uploaded_files = st.sidebar.file_uploader(
 
 st.sidebar.header("🌐 Add Website URL")
 url_input = st.sidebar.text_input("Enter website URL")
+
 
 # =====================================================
 # Ingestion
@@ -161,6 +159,7 @@ def ingest_documents(docs):
         ids=list(clean_chunks.keys()),
     )
 
+
 # =====================================================
 # Ingest Files
 # =====================================================
@@ -174,13 +173,18 @@ if st.sidebar.button("📥 Ingest documents"):
             with open(tmp, "wb") as t:
                 t.write(f.read())
 
-            loader = PyPDFLoader(tmp) if f.name.endswith(".pdf") else TextLoader(tmp)
+            loader = (
+                PyPDFLoader(tmp)
+                if f.name.endswith(".pdf")
+                else TextLoader(tmp)
+            )
             docs.extend(loader.load())
             os.remove(tmp)
 
         ingest_documents(docs)
         st.sidebar.success("Documents ingested ✅")
         st.rerun()
+
 
 # =====================================================
 # Ingest URL
@@ -192,6 +196,7 @@ if st.sidebar.button("🌍 Ingest URL"):
         ingest_documents(load_url_as_documents(url_input))
         st.sidebar.success("Website ingested ✅")
         st.rerun()
+
 
 # =====================================================
 # Clear Knowledge Base
@@ -208,11 +213,13 @@ if st.sidebar.button("🗑️ Clear knowledge base"):
     st.sidebar.success("Knowledge base cleared ✅")
     st.rerun()
 
+
 # =====================================================
 # Session State
 # =====================================================
 st.session_state.setdefault("session_id", str(uuid4()))
 st.session_state.setdefault("messages", [])
+
 
 # =====================================================
 # Disable chat if empty
@@ -224,6 +231,7 @@ if doc_count == 0:
     st.info("Upload documents or a URL to start.")
     st.stop()
 
+
 # =====================================================
 # Show chat history
 # =====================================================
@@ -231,47 +239,30 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+
 # =====================================================
 # Chat
 # =====================================================
 user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 
 if user_input:
-    normalized_query = user_input.strip()
-
-    # User message
     st.session_state.messages.append(
-        {"role": "user", "content": normalized_query}
+        {"role": "user", "content": user_input}
     )
     with st.chat_message("user"):
-        st.markdown(normalized_query)
+        st.markdown(user_input)
 
-    # 👋 Greeting logic (kept separate from RAG)
-    greetings = {"hi", "hello", "hey", "hai", "hii"}
-    if normalized_query.lower() in greetings:
-        greeting_text = "Hello 👋 How can I help you?"
-        with st.chat_message("assistant"):
-            st.markdown(greeting_text)
-        st.session_state.messages.append(
-            {"role": "assistant", "content": greeting_text}
-        )
-        st.stop()
-
-    # 🔍 Retrieve
     retriever = get_retriever(collection_name)
-    raw_docs = retriever.invoke(normalized_query)
+    raw_docs = retriever.invoke(user_input)
 
-    # 🔎 Debug panel
+    # 🔥 Highlighted Debug Panel
     with st.expander("🔍 Retrieved chunks (highlighted)"):
         st.write(f"Retrieved {len(raw_docs)} chunks")
         for i, d in enumerate(raw_docs[:3]):
             st.markdown(f"**Chunk {i+1}:**")
-            st.markdown(
-                highlight_text(d.page_content[:1000], normalized_query),
-                unsafe_allow_html=True,
-            )
+            highlighted = highlight_text(d.page_content[:1000], user_input)
+            st.markdown(highlighted, unsafe_allow_html=True)
 
-    # Deduplicate & limit
     seen, docs = set(), []
     for d in raw_docs:
         t = d.page_content.strip()
@@ -281,18 +272,16 @@ if user_input:
         if len(docs) == 3:
             break
 
-    # Strict answering
     if not docs:
         answer = "I don't know based on the provided context."
     else:
         context = format_docs(docs)
 
-        # Cross-document safety
-        if extract_person_names(normalized_query) - extract_person_names(context):
+        if extract_person_names(user_input) - extract_person_names(context):
             answer = "I don't know based on the provided context."
         else:
             answer = rag_chain_with_memory.invoke(
-                {"input": normalized_query, "context": context},
+                {"input": user_input, "context": context},
                 config={
                     "configurable": {
                         "session_id": st.session_state.session_id
@@ -300,7 +289,6 @@ if user_input:
                 },
             )
 
-    # Assistant message
     with st.chat_message("assistant"):
         st.markdown(answer)
 

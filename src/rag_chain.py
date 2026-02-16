@@ -3,41 +3,40 @@ from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from langchain_community.llms import Ollama
 from langchain_openai import ChatOpenAI
 
-# =====================================================
-# Embeddings & Vector DB
-# =====================================================
+
+# Load embeddings
 embedding_model = SentenceTransformerEmbeddings(
     model_name="all-MiniLM-L6-v2"
 )
 
+
+# Load vector DB
 vectorstore = Chroma(
     persist_directory="chroma_db",
     embedding_function=embedding_model
 )
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+# Create retriever
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-# =====================================================
-# STRICT RAG PROMPT (SINGLE SOURCE OF TRUTH)
-# =====================================================
-system_prompt = """
-You are a STRICT Retrieval-Augmented Generation (RAG) assistant.
+# System prompt
+system_prompt = """You are a retrieval-augmented assistant.
 
-Rules:
-- Answer ONLY using information explicitly present in the Context.
-- Do NOT use prior knowledge or assumptions.
-- Do NOT combine information from different documents unless explicitly stated.
-- Short questions (e.g., "address", "phone") refer to facts in Context.
-- Greetings should be responded to politely, then answer ONLY if Context allows.
+You MUST answer the question using ONLY the provided context.
+Do NOT use prior knowledge.
+Do NOT guess.
+Do NOT explain concepts that are not explicitly present in the context.
 
-If the answer is NOT clearly stated in Context, reply EXACTLY:
+If the answer cannot be found in the context, reply exactly with:
 "I don't know based on the provided context."
 
 Context:
 {context}
 """
+
 
 prompt = ChatPromptTemplate.from_messages(
     [
@@ -46,20 +45,23 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-# =====================================================
-# LLM
-# =====================================================
+# Format documents
+def format_docs(docs):
+    if not docs:
+        return ""
+    return "\n\n".join(doc.page_content for doc in docs)
+
+# Local LLM
+# llm = Ollama(
+#     model="mistral",
+#     temperature=0
+# )
 llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.2
+    model="gpt-4o-mini",   # best cost/quality for RAG
+    temperature=0.2,
 )
 
-# =====================================================
-# RAG CHAIN
-# =====================================================
-def format_docs(docs):
-    return "\n\n".join(d.page_content for d in docs)
-
+# Build LCEL RAG chain
 rag_chain = (
     {
         "context": retriever | format_docs,
@@ -69,3 +71,10 @@ rag_chain = (
     | llm
     | StrOutputParser()
 )
+
+# Test
+if __name__ == "__main__":
+    question = "What is machine learning?"
+    answer = rag_chain.invoke(question)
+    print("\nQuestion:", question)
+    print("Answer:", answer)
