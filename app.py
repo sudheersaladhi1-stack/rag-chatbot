@@ -161,12 +161,25 @@ def ingest_documents(docs):
     if not clean_chunks:
         st.warning("No valid chunks found.")
         return
+    vs = get_vectorstore(collection_name)
+    
+    
+    texts = []
+    metadatas = []
+    ids = []
+
+    for uid, doc in clean_chunks.items():
+        texts.append(doc.page_content)
+        metadatas.append(doc.metadata)
+        ids.append(uid)
 
     vs = get_vectorstore(collection_name)
-    vs.add_documents(
-        documents=list(clean_chunks.values()),
-        ids=list(clean_chunks.keys()),
+    vs.add_texts(
+        texts=texts,
+        metadatas=metadatas,
+        ids=ids,
     )
+
 
 # =====================================================
 # Ingest Actions
