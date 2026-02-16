@@ -12,7 +12,7 @@ from langchain_core.documents import Document
 
 from src.rag_chain import rag_chain
 from src.rag_chat_memory import rag_chain_with_memory, store
-from src.rag_chat_memory import rag_chain
+
 
 # =====================================================
 # Streamlit config
