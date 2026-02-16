@@ -10,18 +10,23 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.documents import Document
 
+# 🔹 RAG core
+from src.rag_chain import rag_chain
 from src.rag_chat_memory import with_memory, store
 
-from src.rag_chain import rag_chain
+# ✅ Wrap chain with memory (CRITICAL)
 rag_chain_with_memory = with_memory(rag_chain)
 
 # =====================================================
 # Streamlit config
 # =====================================================
-st.set_page_config(page_title="RAG Chatbot", page_icon="🤖", layout="centered")
+st.set_page_config(
+    page_title="RAG Chatbot",
+    page_icon="🤖",
+    layout="centered",
+)
 st.title("🤖 RAG Chatbot")
 st.caption("PDF / TXT / URL → Strict RAG (No Hallucination)")
-
 
 # =====================================================
 # Embeddings & Vectorstore
@@ -43,13 +48,9 @@ def get_vectorstore(collection: str):
 
 def get_retriever(collection: str):
     return get_vectorstore(collection).as_retriever(
-        # search_type="similarity",
-        # search_kwargs={"k": 6},
-            search_type="mmr",
-    search_kwargs={"k": 6, "fetch_k": 20}
-
+        search_type="mmr",
+        search_kwargs={"k": 6, "fetch_k": 20},
     )
-
 
 # =====================================================
 # Utilities
@@ -62,11 +63,7 @@ def extract_person_names(text: str):
     return {w.lower() for w in re.findall(r"[A-Z][a-z]+", text)}
 
 
-# ✅ NEW: Highlight function
 def highlight_text(text: str, query: str):
-    """
-    Highlights matching query terms inside retrieved chunk text.
-    """
     text = html.escape(text)
     words = re.findall(r"\w+", query.lower())
 
@@ -75,11 +72,10 @@ def highlight_text(text: str, query: str):
             continue
         pattern = re.compile(rf"({re.escape(word)})", re.IGNORECASE)
         text = pattern.sub(
-            r"<mark style='background-color: #ffe066'>\1</mark>",
+            r"<mark style='background-color:#ffe066'>\1</mark>",
             text,
         )
     return text
-
 
 # =====================================================
 # URL Loader
@@ -109,7 +105,6 @@ def load_url_as_documents(url: str):
         )
     ]
 
-
 # =====================================================
 # Sidebar
 # =====================================================
@@ -125,7 +120,6 @@ uploaded_files = st.sidebar.file_uploader(
 
 st.sidebar.header("🌐 Add Website URL")
 url_input = st.sidebar.text_input("Enter website URL")
-
 
 # =====================================================
 # Ingestion
@@ -144,26 +138,24 @@ def ingest_documents(docs):
             f"{collection_name}:{src}:{ingest_id}:{text}".encode()
         ).hexdigest()
 
-    clean_chunks = {}
+    valid_chunks = {}
     for c in chunks:
         if not c.page_content or len(c.page_content.strip()) < 30:
             continue
-
         src = c.metadata.get("source", "unknown")
         c.metadata["collection"] = collection_name
         uid = make_id(c.page_content, src)
-        clean_chunks[uid] = c
+        valid_chunks[uid] = c
 
-    if not clean_chunks:
+    if not valid_chunks:
         st.warning("No valid chunks found.")
         return
 
     vs = get_vectorstore(collection_name)
     vs.add_documents(
-        documents=list(clean_chunks.values()),
-        ids=list(clean_chunks.keys()),
+        documents=list(valid_chunks.values()),
+        ids=list(valid_chunks.keys()),
     )
-
 
 # =====================================================
 # Ingest Files
@@ -178,18 +170,13 @@ if st.sidebar.button("📥 Ingest documents"):
             with open(tmp, "wb") as t:
                 t.write(f.read())
 
-            loader = (
-                PyPDFLoader(tmp)
-                if f.name.endswith(".pdf")
-                else TextLoader(tmp)
-            )
+            loader = PyPDFLoader(tmp) if f.name.endswith(".pdf") else TextLoader(tmp)
             docs.extend(loader.load())
             os.remove(tmp)
 
         ingest_documents(docs)
         st.sidebar.success("Documents ingested ✅")
         st.rerun()
-
 
 # =====================================================
 # Ingest URL
@@ -201,7 +188,6 @@ if st.sidebar.button("🌍 Ingest URL"):
         ingest_documents(load_url_as_documents(url_input))
         st.sidebar.success("Website ingested ✅")
         st.rerun()
-
 
 # =====================================================
 # Clear Knowledge Base
@@ -218,13 +204,11 @@ if st.sidebar.button("🗑️ Clear knowledge base"):
     st.sidebar.success("Knowledge base cleared ✅")
     st.rerun()
 
-
 # =====================================================
 # Session State
 # =====================================================
 st.session_state.setdefault("session_id", str(uuid4()))
 st.session_state.setdefault("messages", [])
-
 
 # =====================================================
 # Disable chat if empty
@@ -236,7 +220,6 @@ if doc_count == 0:
     st.info("Upload documents or a URL to start.")
     st.stop()
 
-
 # =====================================================
 # Show chat history
 # =====================================================
@@ -244,16 +227,12 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-
 # =====================================================
 # Chat
 # =====================================================
 user_input = st.chat_input("Ask a question based on the uploaded knowledge")
 
 if user_input:
-    # -------------------------------
-    # 1️⃣ Normalize input (CRITICAL FIX)
-    # -------------------------------
     normalized_query = user_input.strip()
 
     st.session_state.messages.append(
@@ -263,39 +242,32 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(normalized_query)
 
-    # -------------------------------
-    # 2️⃣ Greeting handling (BEFORE retrieval)
-    # -------------------------------
+    # 👋 Greeting handling
     greetings = {"hi", "hello", "hey", "hai", "hii"}
     if normalized_query.lower() in greetings:
         greeting_text = "Hello 👋 How can I help you?"
         with st.chat_message("assistant"):
             st.markdown(greeting_text)
-
         st.session_state.messages.append(
             {"role": "assistant", "content": greeting_text}
         )
         st.stop()
 
-    # -------------------------------
-    # 3️⃣ Retrieve documents
-    # -------------------------------
+    # 🔍 Retrieve docs
     retriever = get_retriever(collection_name)
     raw_docs = retriever.invoke(normalized_query)
 
-    # -------------------------------
-    # 🔍 Debug: Highlighted chunks
-    # -------------------------------
+    # 🔎 Debug view
     with st.expander("🔍 Retrieved chunks (highlighted)"):
         st.write(f"Retrieved {len(raw_docs)} chunks")
         for i, d in enumerate(raw_docs[:3]):
             st.markdown(f"**Chunk {i+1}:**")
-            highlighted = highlight_text(d.page_content[:1000], normalized_query)
-            st.markdown(highlighted, unsafe_allow_html=True)
+            st.markdown(
+                highlight_text(d.page_content[:1000], normalized_query),
+                unsafe_allow_html=True,
+            )
 
-    # -------------------------------
-    # 4️⃣ De-duplicate + limit chunks
-    # -------------------------------
+    # Deduplicate
     seen, docs = set(), []
     for d in raw_docs:
         t = d.page_content.strip()
@@ -305,40 +277,21 @@ if user_input:
         if len(docs) == 3:
             break
 
-    # -------------------------------
-    # 5️⃣ Strict answer rules
-    # -------------------------------
     if not docs:
         answer = "I don't know based on the provided context."
     else:
         context = format_docs(docs)
-
-        # Person mismatch safety (prevents wrong-doc answers)
         if extract_person_names(normalized_query) - extract_person_names(context):
             answer = "I don't know based on the provided context."
         else:
-            def invoke_runnable(runnable, *args, **kwargs):
-                for name in ("invoke", "run", "apply", "__call__"):
-                    fn = getattr(runnable, name, None)
-                    if callable(fn):
-                        return fn(*args, **kwargs)
-                raise AttributeError("Runnable has no callable invoke/run/apply/__call__")
-
-            answer = invoke_runnable(
-                rag_chain_with_memory,
+            answer = rag_chain_with_memory.invoke(
                 {"input": normalized_query, "context": context},
                 config={"configurable": {"session_id": st.session_state.session_id}},
             )
 
-
-
-    # -------------------------------
-    # 6️⃣ Display assistant message
-    # -------------------------------
     with st.chat_message("assistant"):
         st.markdown(answer)
 
     st.session_state.messages.append(
         {"role": "assistant", "content": answer}
     )
-
